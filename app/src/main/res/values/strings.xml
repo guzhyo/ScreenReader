@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">屏幕读取器</string>
+    <string name="accessibility_service_description">此服务用于获取当前屏幕上的UI内容，以便展示和分析。数据仅在本地处理，不会上传到任何服务器。</string>
+</resources>

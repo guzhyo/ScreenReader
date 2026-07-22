@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <!-- 标题 -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="屏幕内容读取器"
+        android:textSize="24sp"
+        android:textStyle="bold"
+        android:gravity="center"
+        android:layout_marginBottom="16dp" />
+
+    <!-- 状态显示 -->
+    <TextView
+        android:id="@+id/tv_status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="状态：服务未开启"
+        android:textSize="16sp"
+        android:textColor="#666666"
+        android:layout_marginBottom="12dp" />
+
+    <!-- 开启服务按钮 -->
+    <Button
+        android:id="@+id/btn_toggle_service"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="开启无障碍服务"
+        android:textSize="16sp"
+        android:layout_marginBottom="8dp" />
+
+    <!-- 手动抓取按钮 -->
+    <Button
+        android:id="@+id/btn_capture"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="刷新屏幕内容"
+        android:textSize="16sp"
+        android:enabled="false"
+        android:layout_marginBottom="16dp" />
+
+    <!-- 分隔线 -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="#CCCCCC"
+        android:layout_marginBottom="12dp" />
+
+    <!-- 内容标签 -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="屏幕内容："
+        android:textSize="14sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="8dp" />
+
+    <!-- 屏幕内容显示区域 -->
+    <ScrollView
+        android:id="@+id/scroll_view"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="#F5F5F5"
+        android:padding="12dp">
+
+        <TextView
+            android:id="@+id/tv_content"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="请先在系统设置中开启无障碍服务"
+            android:textSize="13sp"
+            android:fontFamily="monospace"
+            android:textColor="#333333" />
+    </ScrollView>
+
+</LinearLayout>
