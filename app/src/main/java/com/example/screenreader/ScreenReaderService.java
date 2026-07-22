@@ -6,8 +6,10 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.content.Intent;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.Settings;
 import android.util.Log;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
@@ -17,14 +19,15 @@ public class ScreenReaderService extends AccessibilityService {
     private static final String TAG = "ScreenReaderService";
     private static final String CHANNEL_ID = "screen_reader_channel";
     private static final int NOTIFICATION_ID = 1;
-    private static final long REFRESH_INTERVAL = 2000; // 2秒定时刷新
+    private static final long REFRESH_INTERVAL = 2000;
+    private static final long FLOATING_RETRY_INTERVAL = 5000;
 
     public static final String ACTION_CONTENT_UPDATE = "com.example.screenreader.CONTENT_UPDATE";
     public static final String ACTION_STATUS_UPDATE = "com.example.screenreader.STATUS_UPDATE";
     public static final String EXTRA_CONTENT = "content";
     public static final String EXTRA_IS_RUNNING = "is_running";
 
-    /** 静态标志，供 Activity 直接查询服务状态（解决按钮灰色问题） */
+    /** 静态标志，供 Activity 直接查询服务状态 */
     public static volatile boolean isRunning = false;
     public static volatile String lastContent = "";
 
@@ -40,27 +43,49 @@ public class ScreenReaderService extends AccessibilityService {
         }
     };
 
+    /** 延迟重试启动悬浮球（等待用户授予悬浮窗权限） */
+    private final Runnable retryFloating = new Runnable() {
+        @Override
+        public void run() {
+            if (isRunning && !isFloatingStarted) {
+                tryStartFloatingWindow();
+                if (!isFloatingStarted) {
+                    handler.postDelayed(this, FLOATING_RETRY_INTERVAL);
+                }
+            }
+        }
+    };
+
     @Override
     public void onServiceConnected() {
         super.onServiceConnected();
         Log.d(TAG, "无障碍服务已连接");
 
-        AccessibilityServiceInfo info = new AccessibilityServiceInfo();
-        info.eventTypes = AccessibilityEvent.TYPES_ALL_MASK;
-        info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC;
-        info.flags = AccessibilityServiceInfo.DEFAULT;
-        info.notificationTimeout = 200;
-        setServiceInfo(info);
+        try {
+            AccessibilityServiceInfo info = new AccessibilityServiceInfo();
+            info.eventTypes = AccessibilityEvent.TYPES_ALL_MASK;
+            info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC;
+            info.flags = AccessibilityServiceInfo.DEFAULT;
+            info.notificationTimeout = 200;
+            setServiceInfo(info);
+        } catch (Exception e) {
+            Log.e(TAG, "设置服务参数失败", e);
+        }
 
         capturedContent = new StringBuilder();
         isRunning = true;
 
-        createNotificationChannel();
-        startForegroundNotification();
+        try {
+            createNotificationChannel();
+            startForegroundNotification();
+        } catch (Exception e) {
+            Log.e(TAG, "启动前台通知失败", e);
+        }
+
         broadcastStatus(true);
 
-        // 启动悬浮球
-        startFloatingWindow();
+        // 尝试启动悬浮球（如果权限不足会延迟重试）
+        tryStartFloatingWindow();
 
         // 启动定时刷新
         handler.postDelayed(periodicRefresh, REFRESH_INTERVAL);
@@ -69,33 +94,63 @@ public class ScreenReaderService extends AccessibilityService {
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
         if (event == null) return;
-        int eventType = event.getEventType();
-        if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
-                || eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
-                || eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
-            captureScreenContent();
+        try {
+            int eventType = event.getEventType();
+            if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+                    || eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
+                    || eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
+                captureScreenContent();
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "处理无障碍事件失败", e);
+        }
+    }
+
+    /** 安全地尝试启动悬浮球 */
+    private void tryStartFloatingWindow() {
+        if (isFloatingStarted) return;
+
+        // 检查悬浮窗权限
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (!Settings.canDrawOverlays(this)) {
+                Log.w(TAG, "悬浮窗权限未授予，将在 " + (FLOATING_RETRY_INTERVAL / 1000) + " 秒后重试");
+                handler.postDelayed(retryFloating, FLOATING_RETRY_INTERVAL);
+                return;
+            }
+        }
+
+        try {
+            isFloatingStarted = true;
+            Intent intent = new Intent(this, FloatingWindowService.class);
+            startService(intent);
+            Log.d(TAG, "悬浮球服务已启动");
+        } catch (Exception e) {
+            Log.e(TAG, "启动悬浮球失败", e);
+            isFloatingStarted = false;
+            handler.postDelayed(retryFloating, FLOATING_RETRY_INTERVAL);
         }
     }
 
     /** 获取当前屏幕内容 */
     private void captureScreenContent() {
-        AccessibilityNodeInfo rootNode = getRootInActiveWindow();
-        if (rootNode == null) return;
+        try {
+            AccessibilityNodeInfo rootNode = getRootInActiveWindow();
+            if (rootNode == null) return;
 
-        capturedContent = new StringBuilder();
+            capturedContent = new StringBuilder();
+            CharSequence packageName = rootNode.getPackageName();
+            if (packageName != null) {
+                capturedContent.append("【").append(packageName).append("】\n");
+            }
+            traverseNode(rootNode, 0);
+            rootNode.recycle();
 
-        // 获取当前窗口包名
-        CharSequence packageName = rootNode.getPackageName();
-        if (packageName != null) {
-            capturedContent.append("【").append(packageName).append("】\n");
+            String content = capturedContent.toString();
+            lastContent = content;
+            broadcastContent(content);
+        } catch (Exception e) {
+            Log.e(TAG, "抓取屏幕内容失败", e);
         }
-
-        traverseNode(rootNode, 0);
-        rootNode.recycle();
-
-        String content = capturedContent.toString();
-        lastContent = content;
-        broadcastContent(content);
     }
 
     /** 递归遍历节点树 */
@@ -136,25 +191,24 @@ public class ScreenReaderService extends AccessibilityService {
     }
 
     private void broadcastContent(String content) {
-        Intent intent = new Intent(ACTION_CONTENT_UPDATE);
-        intent.setPackage(getPackageName());
-        intent.putExtra(EXTRA_CONTENT, content);
-        sendBroadcast(intent);
+        try {
+            Intent intent = new Intent(ACTION_CONTENT_UPDATE);
+            intent.setPackage(getPackageName());
+            intent.putExtra(EXTRA_CONTENT, content);
+            sendBroadcast(intent);
+        } catch (Exception e) {
+            Log.e(TAG, "广播内容失败", e);
+        }
     }
 
     private void broadcastStatus(boolean running) {
-        Intent intent = new Intent(ACTION_STATUS_UPDATE);
-        intent.setPackage(getPackageName());
-        intent.putExtra(EXTRA_IS_RUNNING, running);
-        sendBroadcast(intent);
-    }
-
-    /** 启动悬浮球服务 */
-    private void startFloatingWindow() {
-        if (!isFloatingStarted) {
-            isFloatingStarted = true;
-            Intent intent = new Intent(this, FloatingWindowService.class);
-            startService(intent);
+        try {
+            Intent intent = new Intent(ACTION_STATUS_UPDATE);
+            intent.setPackage(getPackageName());
+            intent.putExtra(EXTRA_IS_RUNNING, running);
+            sendBroadcast(intent);
+        } catch (Exception e) {
+            Log.e(TAG, "广播状态失败", e);
         }
     }
 
@@ -169,7 +223,7 @@ public class ScreenReaderService extends AccessibilityService {
     private void startForegroundNotification() {
         Notification notification = new Notification.Builder(this, CHANNEL_ID)
                 .setContentTitle("屏幕读取服务运行中")
-                .setContentText("悬浮球已激活，点击可查看屏幕内容")
+                .setContentText("无障碍服务已激活")
                 .setSmallIcon(android.R.drawable.ic_menu_view)
                 .setOngoing(true)
                 .build();
@@ -200,7 +254,10 @@ public class ScreenReaderService extends AccessibilityService {
         isRunning = false;
         lastContent = "";
         handler.removeCallbacks(periodicRefresh);
+        handler.removeCallbacks(retryFloating);
         broadcastStatus(false);
-        stopService(new Intent(this, FloatingWindowService.class));
+        try {
+            stopService(new Intent(this, FloatingWindowService.class));
+        } catch (Exception ignored) {}
     }
 }

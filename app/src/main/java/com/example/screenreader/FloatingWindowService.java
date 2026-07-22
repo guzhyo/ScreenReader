@@ -10,6 +10,7 @@ import android.graphics.PixelFormat;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.IBinder;
+import android.provider.Settings;
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -28,6 +29,7 @@ public class FloatingWindowService extends Service {
     private View contentPanel;
     private TextView tvPanelContent;
     private boolean isPanelVisible = false;
+    private boolean isBallAdded = false;
 
     @Override
     public IBinder onBind(Intent intent) {
@@ -38,9 +40,22 @@ public class FloatingWindowService extends Service {
     public void onCreate() {
         super.onCreate();
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
-        createFloatingBall();
         registerReceivers();
-        Log.d(TAG, "悬浮球服务已创建");
+
+        // 安全检查悬浮窗权限
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            Log.e(TAG, "悬浮窗权限未授予，无法创建悬浮球");
+            stopSelf();
+            return;
+        }
+
+        try {
+            createFloatingBall();
+            Log.d(TAG, "悬浮球服务已创建");
+        } catch (Exception e) {
+            Log.e(TAG, "创建悬浮球失败", e);
+            stopSelf();
+        }
     }
 
     /** 创建悬浮球 */
@@ -67,28 +82,16 @@ public class FloatingWindowService extends Service {
         params.y = dp2px(300);
 
         windowManager.addView(floatingBall, params);
+        isBallAdded = true;
         setupTouch(floatingBall, params);
     }
 
-    /** 设置拖拽、点击、长按 */
+    /** 设置拖拽、点击 */
     private void setupTouch(final View view, final WindowManager.LayoutParams params) {
         final float[] initialTouch = new float[2];
         final float[] initialPos = new float[2];
-        final long[] downTime = new long[1];
         final boolean[] moved = {false};
-        final android.os.Handler handler = new android.os.Handler();
-        final boolean[] longPressed = {false};
         final int clickThreshold = dp2px(10);
-
-        final Runnable longPressRunnable = () -> {
-            longPressed[0] = true;
-            // 长按：切换面板显示
-            if (isPanelVisible) {
-                hidePanel();
-            } else {
-                showPanel();
-            }
-        };
 
         view.setOnTouchListener((v, event) -> {
             switch (event.getAction()) {
@@ -97,10 +100,7 @@ public class FloatingWindowService extends Service {
                     initialTouch[1] = event.getRawY();
                     initialPos[0] = params.x;
                     initialPos[1] = params.y;
-                    downTime[0] = System.currentTimeMillis();
                     moved[0] = false;
-                    longPressed[0] = false;
-                    handler.postDelayed(longPressRunnable, 600);
                     return true;
 
                 case MotionEvent.ACTION_MOVE:
@@ -108,19 +108,18 @@ public class FloatingWindowService extends Service {
                     float dy = event.getRawY() - initialTouch[1];
                     if (Math.abs(dx) > clickThreshold || Math.abs(dy) > clickThreshold) {
                         moved[0] = true;
-                        handler.removeCallbacks(longPressRunnable);
                     }
                     if (moved[0]) {
                         params.x = (int) (initialPos[0] + dx);
                         params.y = (int) (initialPos[1] + dy);
-                        windowManager.updateViewLayout(view, params);
+                        try {
+                            windowManager.updateViewLayout(view, params);
+                        } catch (Exception ignored) {}
                     }
                     return true;
 
                 case MotionEvent.ACTION_UP:
-                    handler.removeCallbacks(longPressRunnable);
-                    if (!moved[0] && !longPressed[0]) {
-                        // 短点击：切换面板
+                    if (!moved[0]) {
                         if (isPanelVisible) {
                             hidePanel();
                         } else {
@@ -141,78 +140,79 @@ public class FloatingWindowService extends Service {
             return;
         }
 
-        int panelWidth = dp2px(320);
-        int panelHeight = dp2px(480);
+        try {
+            int panelWidth = dp2px(320);
+            int panelHeight = dp2px(480);
 
-        // 主容器
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(Color.WHITE);
-        root.setElevation(dp2px(8));
+            LinearLayout root = new LinearLayout(this);
+            root.setOrientation(LinearLayout.VERTICAL);
+            root.setBackgroundColor(Color.WHITE);
+            root.setElevation(dp2px(8));
 
-        GradientDrawable panelBg = new GradientDrawable();
-        panelBg.setCornerRadius(dp2px(12));
-        panelBg.setColor(0xF5FFFFFF);
-        root.setBackground(panelBg);
-        root.setClipToOutline(true);
+            GradientDrawable panelBg = new GradientDrawable();
+            panelBg.setCornerRadius(dp2px(12));
+            panelBg.setColor(0xF5FFFFFF);
+            root.setBackground(panelBg);
+            root.setClipToOutline(true);
 
-        // 标题栏
-        LinearLayout header = new LinearLayout(this);
-        header.setOrientation(LinearLayout.HORIZONTAL);
-        header.setBackgroundColor(0xFF4CAF50);
-        header.setPadding(dp2px(12), dp2px(10), dp2px(8), dp2px(10));
-        header.setGravity(Gravity.CENTER_VERTICAL);
+            // 标题栏
+            LinearLayout header = new LinearLayout(this);
+            header.setOrientation(LinearLayout.HORIZONTAL);
+            header.setBackgroundColor(0xFF4CAF50);
+            header.setPadding(dp2px(12), dp2px(10), dp2px(8), dp2px(10));
+            header.setGravity(Gravity.CENTER_VERTICAL);
 
-        TextView title = new TextView(this);
-        title.setText("屏幕内容");
-        title.setTextColor(Color.WHITE);
-        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
-        title.setLayoutParams(new LinearLayout.LayoutParams(0,
-                LinearLayout.LayoutParams.WRAP_CONTENT, 1));
-        header.addView(title);
+            TextView title = new TextView(this);
+            title.setText("屏幕内容");
+            title.setTextColor(Color.WHITE);
+            title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+            title.setLayoutParams(new LinearLayout.LayoutParams(0,
+                    LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+            header.addView(title);
 
-        TextView btnClose = new TextView(this);
-        btnClose.setText("收起 ✕");
-        btnClose.setTextColor(Color.WHITE);
-        btnClose.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        btnClose.setPadding(dp2px(8), dp2px(4), dp2px(8), dp2px(4));
-        btnClose.setOnClickListener(v -> hidePanel());
-        header.addView(btnClose);
+            TextView btnClose = new TextView(this);
+            btnClose.setText("收起");
+            btnClose.setTextColor(Color.WHITE);
+            btnClose.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+            btnClose.setPadding(dp2px(8), dp2px(4), dp2px(8), dp2px(4));
+            btnClose.setOnClickListener(v -> hidePanel());
+            header.addView(btnClose);
 
-        root.addView(header, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT));
+            root.addView(header, new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT));
 
-        // 内容区域
-        ScrollView scrollView = new ScrollView(this);
-        scrollView.setPadding(dp2px(10), dp2px(8), dp2px(10), dp2px(8));
+            // 内容区域
+            ScrollView scrollView = new ScrollView(this);
+            scrollView.setPadding(dp2px(10), dp2px(8), dp2px(10), dp2px(8));
 
-        tvPanelContent = new TextView(this);
-        tvPanelContent.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-        tvPanelContent.setTextColor(0xFF333333);
-        tvPanelContent.setTypeface(android.graphics.Typeface.MONOSPACE);
-        tvPanelContent.setText(ScreenReaderService.lastContent != null
-                ? ScreenReaderService.lastContent : "等待获取屏幕内容...");
+            tvPanelContent = new TextView(this);
+            tvPanelContent.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+            tvPanelContent.setTextColor(0xFF333333);
+            tvPanelContent.setTypeface(android.graphics.Typeface.MONOSPACE);
+            tvPanelContent.setText(ScreenReaderService.lastContent != null
+                    ? ScreenReaderService.lastContent : "等待获取屏幕内容...");
 
-        scrollView.addView(tvPanelContent);
-        root.addView(scrollView, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
+            scrollView.addView(tvPanelContent);
+            root.addView(scrollView, new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
 
-        // 添加到窗口
-        WindowManager.LayoutParams params = new WindowManager.LayoutParams(
-                panelWidth, panelHeight,
-                getWindowType(),
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL |
-                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                PixelFormat.TRANSLUCENT
-        );
-        params.gravity = Gravity.CENTER;
-        params.x = 0;
-        params.y = 0;
+            // 添加到窗口
+            WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+                    panelWidth, panelHeight,
+                    getWindowType(),
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL |
+                            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                    PixelFormat.TRANSLUCENT
+            );
+            params.gravity = Gravity.CENTER;
 
-        contentPanel = root;
-        windowManager.addView(contentPanel, params);
-        isPanelVisible = true;
+            contentPanel = root;
+            windowManager.addView(contentPanel, params);
+            isPanelVisible = true;
+        } catch (Exception e) {
+            Log.e(TAG, "显示内容面板失败", e);
+        }
     }
 
     /** 隐藏内容面板 */
@@ -223,7 +223,6 @@ public class FloatingWindowService extends Service {
         isPanelVisible = false;
     }
 
-    /** 获取合适的窗口类型 */
     private int getWindowType() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             return WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY;
@@ -231,7 +230,6 @@ public class FloatingWindowService extends Service {
         return WindowManager.LayoutParams.TYPE_PHONE;
     }
 
-    /** 注册广播接收器 */
     private void registerReceivers() {
         IntentFilter filter = new IntentFilter(ScreenReaderService.ACTION_CONTENT_UPDATE);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -259,11 +257,11 @@ public class FloatingWindowService extends Service {
     @Override
     public void onDestroy() {
         super.onDestroy();
+        try { unregisterReceiver(contentReceiver); } catch (Exception ignored) {}
         try {
-            unregisterReceiver(contentReceiver);
+            if (isBallAdded && floatingBall != null) windowManager.removeView(floatingBall);
+            if (contentPanel != null) windowManager.removeView(contentPanel);
         } catch (Exception ignored) {}
-        if (floatingBall != null) windowManager.removeView(floatingBall);
-        if (contentPanel != null) windowManager.removeView(contentPanel);
         Log.d(TAG, "悬浮球服务已销毁");
     }
 }
