@@ -5,12 +5,12 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
 import android.view.accessibility.AccessibilityManager;
 import android.widget.Button;
-import android.widget.ScrollView;
 import android.widget.TextView;
 
 import androidx.appcompat.app.AppCompatActivity;
@@ -19,19 +19,18 @@ import java.util.List;
 
 public class MainActivity extends AppCompatActivity {
 
-    private Button btnToggleService;
-    private Button btnCapture;
+    private Button btnAccessibility;
+    private Button btnOverlay;
+    private Button btnMinimize;
     private TextView tvStatus;
-    private TextView tvContent;
-    private ScrollView scrollView;
+    private TextView tvDetail;
 
-    private boolean isServiceRunning = false;
+    private static final int REQUEST_OVERLAY = 1001;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-
         initViews();
         setupListeners();
     }
@@ -39,99 +38,118 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
-        checkServiceStatus();
+        refreshStatus();
     }
 
-    /**
-     * 初始化视图组件
-     */
     private void initViews() {
-        btnToggleService = findViewById(R.id.btn_toggle_service);
-        btnCapture = findViewById(R.id.btn_capture);
+        btnAccessibility = findViewById(R.id.btn_accessibility);
+        btnOverlay = findViewById(R.id.btn_overlay);
+        btnMinimize = findViewById(R.id.btn_minimize);
         tvStatus = findViewById(R.id.tv_status);
-        tvContent = findViewById(R.id.tv_content);
-        scrollView = findViewById(R.id.scroll_view);
+        tvDetail = findViewById(R.id.tv_detail);
     }
 
-    /**
-     * 设置按钮点击事件
-     */
     private void setupListeners() {
-        // 切换无障碍服务开关（跳转到系统设置页面）
-        btnToggleService.setOnClickListener(v -> {
-            Intent intent = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS);
-            startActivity(intent);
+        // 按钮1：跳转无障碍设置
+        btnAccessibility.setOnClickListener(v ->
+                startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
+
+        // 按钮2：跳转悬浮窗权限设置
+        btnOverlay.setOnClickListener(v -> {
+            Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:" + getPackageName()));
+            startActivityForResult(intent, REQUEST_OVERLAY);
         });
 
-        // 手动触发一次屏幕内容抓取
-        btnCapture.setOnClickListener(v -> {
-            Intent intent = new Intent(ScreenReaderService.ACTION_REQUEST_CAPTURE);
-            intent.setPackage(getPackageName());
-            sendBroadcast(intent);
-        });
+        // 按钮3：最小化到后台（悬浮球继续工作）
+        btnMinimize.setOnClickListener(v -> moveTaskToBack(true));
     }
 
-    /**
-     * 检查无障碍服务是否已启用
-     */
-    private void checkServiceStatus() {
-        boolean enabled = isAccessibilityServiceEnabled();
-        updateServiceUI(enabled);
+    /** 刷新所有权限状态和 UI */
+    private void refreshStatus() {
+        boolean a11y = isAccessibilityEnabled();
+        boolean overlay = canDrawOverlay();
+
+        // 使用静态标志做辅助判断（解决部分机型检测不准的问题）
+        if (ScreenReaderService.isRunning) a11y = true;
+
+        // 更新无障碍按钮
+        if (a11y) {
+            btnAccessibility.setText("✓ 无障碍服务已开启");
+            btnAccessibility.setBackgroundColor(0xFF4CAF50);
+        } else {
+            btnAccessibility.setText("开启无障碍服务");
+            btnAccessibility.setBackgroundColor(0xFF2196F3);
+        }
+
+        // 更新悬浮窗按钮
+        if (overlay) {
+            btnOverlay.setText("✓ 悬浮窗权限已开启");
+            btnOverlay.setBackgroundColor(0xFF4CAF50);
+        } else {
+            btnOverlay.setText("开启悬浮窗权限");
+            btnOverlay.setBackgroundColor(0xFFFF9800);
+        }
+
+        // 更新最小化按钮
+        btnMinimize.setEnabled(a11y && overlay);
+        if (a11y && overlay) {
+            btnMinimize.setText("最小化（悬浮球工作中）");
+            btnMinimize.setBackgroundColor(0xFF4CAF50);
+        } else {
+            btnMinimize.setText("请先开启以上权限");
+            btnMinimize.setBackgroundColor(0xFF9E9E9E);
+        }
+
+        // 更新状态文字
+        if (a11y && overlay) {
+            tvStatus.setText("全部就绪！点击「最小化」后使用悬浮球查看屏幕内容");
+            tvDetail.setText("• 悬浮球：点击展开内容面板，拖拽移动位置\n"
+                    + "• 内容面板：实时显示当前屏幕的UI元素\n"
+                    + "• 收起面板：点击面板右上角「收起」或再次点击悬浮球");
+        } else if (a11y) {
+            tvStatus.setText("还需开启悬浮窗权限");
+            tvDetail.setText("悬浮窗权限用于显示悬浮球，请点击上方按钮授权");
+        } else {
+            tvStatus.setText("请先开启无障碍服务");
+            tvDetail.setText("在系统设置中找到「屏幕读取器」并启用");
+        }
     }
 
-    /**
-     * 判断无障碍服务是否正在运行
-     */
-    private boolean isAccessibilityServiceEnabled() {
+    /** 检测无障碍服务是否启用 */
+    private boolean isAccessibilityEnabled() {
         AccessibilityManager am = (AccessibilityManager) getSystemService(Context.ACCESSIBILITY_SERVICE);
         if (am == null) return false;
-
-        List<AccessibilityServiceInfo> enabledServices =
+        List<AccessibilityServiceInfo> services =
                 am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK);
-
-        if (enabledServices == null) return false;
-
-        String myServiceName = getPackageName() + "/" + ScreenReaderService.class.getName();
-        for (AccessibilityServiceInfo service : enabledServices) {
-            if (service.getId().contains(getPackageName())) {
-                return true;
-            }
+        if (services == null) return false;
+        for (AccessibilityServiceInfo s : services) {
+            if (s.getId() != null && s.getId().contains(getPackageName())) return true;
         }
         return false;
     }
 
-    /**
-     * 根据服务状态更新界面
-     */
-    private void updateServiceUI(boolean running) {
-        isServiceRunning = running;
-        if (running) {
-            tvStatus.setText("状态：服务运行中");
-            btnToggleService.setText("前往设置（服务已开启）");
-            btnCapture.setEnabled(true);
-        } else {
-            tvStatus.setText("状态：服务未开启");
-            btnToggleService.setText("开启无障碍服务");
-            btnCapture.setEnabled(false);
-            tvContent.setText("请先在系统设置中开启无障碍服务");
+    /** 检测悬浮窗权限 */
+    private boolean canDrawOverlay() {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this);
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQUEST_OVERLAY) {
+            refreshStatus();
         }
     }
 
-    /**
-     * 注册广播接收器，监听来自 AccessibilityService 的数据
-     */
+    // 广播接收器（保留兼容）
     @Override
     protected void onStart() {
         super.onStart();
-
-        IntentFilter contentFilter = new IntentFilter(ScreenReaderService.ACTION_CONTENT_UPDATE);
         IntentFilter statusFilter = new IntentFilter(ScreenReaderService.ACTION_STATUS_UPDATE);
-
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(contentReceiver, contentFilter, Context.RECEIVER_NOT_EXPORTED);
             registerReceiver(statusReceiver, statusFilter, Context.RECEIVER_NOT_EXPORTED);
         } else {
-            registerReceiver(contentReceiver, contentFilter);
             registerReceiver(statusReceiver, statusFilter);
         }
     }
@@ -139,37 +157,13 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onStop() {
         super.onStop();
-        try {
-            unregisterReceiver(contentReceiver);
-            unregisterReceiver(statusReceiver);
-        } catch (Exception e) {
-            // 忽略未注册的异常
-        }
+        try { unregisterReceiver(statusReceiver); } catch (Exception ignored) {}
     }
 
-    /**
-     * 接收屏幕内容的广播
-     */
-    private final BroadcastReceiver contentReceiver = new BroadcastReceiver() {
-        @Override
-        public void onReceive(Context context, Intent intent) {
-            String content = intent.getStringExtra(ScreenReaderService.EXTRA_CONTENT);
-            if (content != null) {
-                tvContent.setText(content);
-                // 自动滚动到底部
-                scrollView.post(() -> scrollView.fullScroll(ScrollView.FOCUS_DOWN));
-            }
-        }
-    };
-
-    /**
-     * 接收服务状态的广播
-     */
     private final BroadcastReceiver statusReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            boolean running = intent.getBooleanExtra(ScreenReaderService.EXTRA_IS_RUNNING, false);
-            updateServiceUI(running);
+            refreshStatus();
         }
     };
 }
